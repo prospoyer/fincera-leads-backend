@@ -1,0 +1,12 @@
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.env
+leads.db
+.irs_cache/
+leads_export.csv
+dist/
+*.egg-info/
+.DS_Store
