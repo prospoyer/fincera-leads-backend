@@ -34,12 +34,28 @@ MIDDLEWARE = [
 ROOT_URLCONF = "fincera_project.urls"
 WSGI_APPLICATION = "fincera_project.wsgi.application"
 
-# Database — uses local leads.db in dev, Railway volume path in prod
-DB_PATH = os.environ.get("DB_PATH", str(PROJECT_ROOT / "leads.db"))
+# Database — auto-detect writable path for SQLite
+# Priority: DB_PATH env var → /app/leads.db (Railway) → local project root
+def _resolve_db_path():
+    from pathlib import Path as _P
+    env_path = os.environ.get("DB_PATH")
+    if env_path:
+        p = _P(env_path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return str(p)
+    # Railway Nixpacks uses /app as workdir
+    for candidate in ["/app/leads.db", str(PROJECT_ROOT / "leads.db")]:
+        try:
+            _P(candidate).parent.mkdir(parents=True, exist_ok=True)
+            return candidate
+        except OSError:
+            continue
+    return str(PROJECT_ROOT / "leads.db")
+
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.sqlite3",
-        "NAME": DB_PATH,
+        "NAME": _resolve_db_path(),
     }
 }
 
