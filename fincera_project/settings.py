@@ -27,6 +27,7 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = "fincera_project.urls"
+WSGI_APPLICATION = "fincera_project.wsgi.application"
 
 # Database — uses local leads.db in dev, Railway volume path in prod
 DB_PATH = os.environ.get("DB_PATH", str(PROJECT_ROOT / "leads.db"))
