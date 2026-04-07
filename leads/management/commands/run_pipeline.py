@@ -63,23 +63,15 @@ class Command(BaseCommand):
             pipeline_db.init_db()
 
             if stage in ("discover", "all"):
-                batch_size = 5
-                total = 0
-                for i in range(0, len(states), batch_size):
-                    if cancel_check():
-                        raise p.PipelineCancelled()
-                    batch = states[i:i + batch_size]
-                    self.stdout.write(f"[pipeline] discover batch {i//batch_size + 1}: {batch}")
-                    added = p.stage_discover(
-                        states=batch,
-                        revenue_min=revenue_min,
-                        revenue_max=revenue_max,
-                        max_orgs=max_orgs,
-                        cancel_check=cancel_check,
-                    )
-                    total += added
-                    if max_orgs and total >= max_orgs:
-                        break
+                # One call — max_orgs is a single budget for the whole run (not per state batch).
+                self.stdout.write(f"[pipeline] discover states={states} max_orgs={max_orgs}")
+                p.stage_discover(
+                    states=states,
+                    revenue_min=revenue_min,
+                    revenue_max=revenue_max,
+                    max_orgs=max_orgs,
+                    cancel_check=cancel_check,
+                )
 
             if stage in ("enrich", "all"):
                 p.stage_enrich(cancel_check=cancel_check)
