@@ -23,7 +23,7 @@ class OrgSerializer(serializers.ModelSerializer):
 
 
 class OrgListSerializer(serializers.ModelSerializer):
-    """Lighter serializer for list views."""
+    """Lighter serializer for list views — uses annotated count to avoid N+1."""
     contact_count = serializers.SerializerMethodField()
 
     class Meta:
@@ -34,14 +34,20 @@ class OrgListSerializer(serializers.ModelSerializer):
         ]
 
     def get_contact_count(self, obj):
+        # Use annotation if available (set by OrgViewSet.get_queryset), else fallback
+        if hasattr(obj, "contact_count_ann"):
+            return obj.contact_count_ann
         return obj.contacts.count()
 
 
 class ContactSerializer(serializers.ModelSerializer):
-    ein         = serializers.CharField(source="org_id")  # org_id == ein value
-    org_name    = serializers.CharField(source="org.name",    default=None)
-    org_state   = serializers.CharField(source="org.state",   default=None)
-    org_revenue = serializers.IntegerField(source="org.revenue", default=None)
+    ein          = serializers.CharField(source="org_id")
+    org_name     = serializers.CharField(source="org.name",         default=None)
+    org_city     = serializers.CharField(source="org.city",         default=None)
+    org_state    = serializers.CharField(source="org.state",        default=None)
+    org_revenue  = serializers.IntegerField(source="org.revenue",   default=None)
+    org_website  = serializers.CharField(source="org.website",      default=None)
+    has_property = serializers.IntegerField(source="org.has_property", default=0)
 
     class Meta:
         model = Contact
@@ -49,7 +55,8 @@ class ContactSerializer(serializers.ModelSerializer):
             "id", "ein", "full_name", "first_name", "last_name",
             "title", "compensation", "email", "email_status",
             "email_source", "priority", "created_at",
-            "org_name", "org_state", "org_revenue",
+            "org_name", "org_city", "org_state", "org_revenue",
+            "org_website", "has_property",
         ]
 
 

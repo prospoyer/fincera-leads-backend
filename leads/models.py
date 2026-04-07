@@ -80,6 +80,7 @@ class PipelineRun(models.Model):
         ("running",   "Running"),
         ("completed", "Completed"),
         ("failed",    "Failed"),
+        ("cancelled", "Cancelled"),
     ]
 
     stage      = models.CharField(max_length=20, choices=STAGES)
