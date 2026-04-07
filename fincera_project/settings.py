@@ -35,7 +35,7 @@ ROOT_URLCONF = "fincera_project.urls"
 WSGI_APPLICATION = "fincera_project.wsgi.application"
 
 # Database — auto-detect writable path for SQLite
-# Priority: DB_PATH env var → /app/leads.db (Railway) → local project root
+# Priority: DB_PATH env var → /data/leads.db (Railway volume) → local project root
 def _resolve_db_path():
     from pathlib import Path as _P
     env_path = os.environ.get("DB_PATH")
@@ -43,13 +43,12 @@ def _resolve_db_path():
         p = _P(env_path)
         p.parent.mkdir(parents=True, exist_ok=True)
         return str(p)
-    # Railway Nixpacks uses /app as workdir
-    for candidate in ["/app/leads.db", str(PROJECT_ROOT / "leads.db")]:
-        try:
-            _P(candidate).parent.mkdir(parents=True, exist_ok=True)
-            return candidate
-        except OSError:
-            continue
+    # On Railway, use the persistent volume at /data/
+    if os.environ.get("RAILWAY_PUBLIC_DOMAIN") or os.environ.get("RAILWAY_ENVIRONMENT"):
+        p = _P("/data/leads.db")
+        p.parent.mkdir(parents=True, exist_ok=True)
+        return str(p)
+    # Local development
     return str(PROJECT_ROOT / "leads.db")
 
 DATABASES = {
