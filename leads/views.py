@@ -1,10 +1,11 @@
 import csv
+import os
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
-from django.db.models import Count, Q
+from django.db.models import Count
 from django.http import HttpResponse
 from rest_framework import viewsets, status
 from rest_framework.decorators import api_view
@@ -17,6 +18,9 @@ from .serializers import (
     ContactSerializer, PipelineRunSerializer,
 )
 
+VALID_STAGES  = ["discover", "enrich", "scrape", "emails", "export", "all"]
+PIPELINE_ROOT = Path(__file__).resolve().parents[2]  # fincera-leads/
+
 
 # ─── Orgs ────────────────────────────────────────────────────────────────────
 
@@ -27,9 +31,7 @@ class OrgViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ["revenue", "name", "state", "created_at"]
 
     def get_serializer_class(self):
-        if self.action == "list":
-            return OrgListSerializer
-        return OrgSerializer
+        return OrgListSerializer if self.action == "list" else OrgSerializer
 
 
 # ─── Contacts ────────────────────────────────────────────────────────────────
@@ -42,7 +44,8 @@ class ContactViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         return (
-            Contact.objects.select_related("org")
+            Contact.objects
+            .select_related("org")
             .order_by("-priority", "-org__revenue")
         )
 
@@ -58,12 +61,6 @@ def stats(request):
         email__isnull=False
     ).exclude(email_status="invalid").count()
 
-    verified_emails = Contact.objects.filter(email_status="verified").count()
-    found_emails    = Contact.objects.filter(email_status="found").count()
-    guessed_emails  = Contact.objects.filter(email_status="guessed").count()
-
-    has_property_orgs = Org.objects.filter(has_property=1).count()
-
     orgs_by_state = list(
         Org.objects.values("state")
         .annotate(count=Count("ein"))
@@ -76,19 +73,17 @@ def stats(request):
         .order_by("-count")[:10]
     )
 
-    email_coverage = round(contacts_with_email / total_contacts * 100, 1) if total_contacts else 0
-
     return Response({
-        "total_orgs":           total_orgs,
-        "total_contacts":       total_contacts,
-        "contacts_with_email":  contacts_with_email,
-        "email_coverage_pct":   email_coverage,
-        "verified_emails":      verified_emails,
-        "found_emails":         found_emails,
-        "guessed_emails":       guessed_emails,
-        "has_property_orgs":    has_property_orgs,
-        "orgs_by_state":        orgs_by_state,
-        "top_titles":           top_titles,
+        "total_orgs":          total_orgs,
+        "total_contacts":      total_contacts,
+        "contacts_with_email": contacts_with_email,
+        "email_coverage_pct":  round(contacts_with_email / total_contacts * 100, 1) if total_contacts else 0,
+        "verified_emails":     Contact.objects.filter(email_status="verified").count(),
+        "found_emails":        Contact.objects.filter(email_status="found").count(),
+        "guessed_emails":      Contact.objects.filter(email_status="guessed").count(),
+        "has_property_orgs":   Org.objects.filter(has_property=1).count(),
+        "orgs_by_state":       orgs_by_state,
+        "top_titles":          top_titles,
     })
 
 
@@ -129,11 +124,6 @@ def export_csv(request):
 
 # ─── Pipeline ────────────────────────────────────────────────────────────────
 
-VALID_STAGES = ["discover", "enrich", "scrape", "emails", "export", "all"]
-
-PIPELINE_ROOT = Path(__file__).resolve().parents[2]  # /home/wmstf/fincera-leads
-
-
 @api_view(["GET"])
 def pipeline_runs(request):
     runs = PipelineRun.objects.all()[:20]
@@ -149,7 +139,6 @@ def pipeline_trigger(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    # Check if a run is already in progress
     if PipelineRun.objects.filter(status="running").exists():
         return Response(
             {"error": "A pipeline run is already in progress."},
@@ -158,17 +147,14 @@ def pipeline_trigger(request):
 
     run = PipelineRun.objects.create(stage=stage, status="running")
 
-    # Use manage.py run_pipeline so it updates PipelineRun status when done/failed
+    # Pass run ID to management command so it updates the SAME record (not a new one)
     manage_py = PIPELINE_ROOT / "backend" / "manage.py"
-    cmd = [sys.executable, str(manage_py), "run_pipeline", "--stage", stage]
+    cmd = [sys.executable, str(manage_py), "run_pipeline", "--stage", stage, "--run-id", str(run.id)]
+    env = {**os.environ, "DJANGO_SETTINGS_MODULE": "fincera_project.settings"}
+
     try:
-        subprocess.Popen(
-            cmd,
-            cwd=str(PIPELINE_ROOT / "backend"),
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            env={**__import__("os").environ, "DJANGO_SETTINGS_MODULE": "fincera_project.settings"},
-        )
+        subprocess.Popen(cmd, cwd=str(PIPELINE_ROOT / "backend"),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     except Exception as e:
         run.status = "failed"
         run.log = str(e)
@@ -181,16 +167,13 @@ def pipeline_trigger(request):
 
 @api_view(["GET"])
 def pipeline_status(request):
-    """Return the most recent run's status, auto-expire stale 'running' runs."""
-    from datetime import timedelta
     run = PipelineRun.objects.first()
     if not run:
         return Response({"status": "idle"})
 
-    # Mark as failed if stuck running for more than 6 hours with no update
+    # Auto-expire runs stuck > 6 hours (process likely crashed)
     if run.status == "running" and run.started_at:
-        age = datetime.now() - run.started_at
-        if age > timedelta(hours=6):
+        if datetime.now() - run.started_at > timedelta(hours=6):
             run.status = "failed"
             run.log = "Timed out — process may have crashed."
             run.ended_at = datetime.now()
