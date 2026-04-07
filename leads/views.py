@@ -21,6 +21,22 @@ from .serializers import (
     ContactSerializer, PipelineRunSerializer,
 )
 
+# Runs stuck "running" block new triggers and make Stop feel broken — clear automatically.
+STALE_RUNNING_MINUTES = 25
+
+
+def _expire_stale_running_runs():
+    """Mark long-running rows as failed (worker likely died without updating DB)."""
+    cutoff = datetime.now() - timedelta(minutes=STALE_RUNNING_MINUTES)
+    PipelineRun.objects.filter(status="running", started_at__lt=cutoff).update(
+        status="failed",
+        ended_at=datetime.now(),
+        log="Auto-cleared: exceeded time limit or worker exited without finishing.",
+        process_pid=None,
+        cancel_requested=False,
+    )
+
+
 @api_view(["GET"])
 def health(request):
     """Health check — returns DB path, tables, and any errors."""
@@ -185,12 +201,15 @@ def export_csv(request):
 
 @api_view(["GET"])
 def pipeline_runs(request):
-    runs = PipelineRun.objects.all()[:20]
+    _expire_stale_running_runs()
+    runs = PipelineRun.objects.order_by("-started_at")[:20]
     return Response(PipelineRunSerializer(runs, many=True).data)
 
 
 @api_view(["POST"])
 def pipeline_trigger(request):
+    _expire_stale_running_runs()
+
     stage       = request.data.get("stage", "all")
     states      = request.data.get("states", [])
     revenue_min = request.data.get("revenue_min")
@@ -247,6 +266,8 @@ def pipeline_trigger(request):
 
 @api_view(["POST"])
 def pipeline_stop(request):
+    _expire_stale_running_runs()
+
     run = (
         PipelineRun.objects.filter(status="running")
         .order_by("-started_at")
@@ -255,11 +276,20 @@ def pipeline_stop(request):
     if not run:
         return Response({"error": "No running pipeline."}, status=status.HTTP_404_NOT_FOUND)
 
+    # Worker never started or already exited without updating the row — nothing to SIGTERM.
+    if run.process_pid is None:
+        run.status = "cancelled"
+        run.log = "Stopped — no worker PID (process already exited or failed to start)."
+        run.ended_at = datetime.now()
+        run.cancel_requested = False
+        run.save()
+        return Response(PipelineRunSerializer(run).data)
+
     run.cancel_requested = True
     run.save(update_fields=["cancel_requested"])
 
     # Let the worker exit cooperatively (checks cancel_requested between batches)
-    cooperative_deadline = time.monotonic() + 12.0
+    cooperative_deadline = time.monotonic() + 6.0
     while time.monotonic() < cooperative_deadline:
         run.refresh_from_db()
         if run.status != "running":
@@ -289,6 +319,8 @@ def pipeline_stop(request):
 
 @api_view(["GET"])
 def pipeline_status(request):
+    _expire_stale_running_runs()
+
     run = (
         PipelineRun.objects.filter(status="running").order_by("-started_at").first()
         or PipelineRun.objects.order_by("-started_at").first()
@@ -296,7 +328,7 @@ def pipeline_status(request):
     if not run:
         return Response({"status": "idle"})
 
-    # Auto-expire runs stuck > 6 hours (process likely crashed)
+    # Secondary safety net (shorter than STALE_RUNNING_MINUTES for very old rows)
     if run.status == "running" and run.started_at:
         if datetime.now() - run.started_at > timedelta(hours=6):
             run.status = "failed"
