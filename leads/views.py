@@ -56,7 +56,8 @@ def health(request):
 
 
 VALID_STAGES  = ["discover", "enrich", "scrape", "emails", "export", "all"]
-PIPELINE_ROOT = Path(__file__).resolve().parents[2]  # fincera-leads/
+# parents[1] = backend/ dir (where manage.py lives), works both locally and on Railway
+MANAGE_PY = Path(__file__).resolve().parents[1] / "manage.py"
 
 
 # ─── Orgs ────────────────────────────────────────────────────────────────────
@@ -185,12 +186,11 @@ def pipeline_trigger(request):
     run = PipelineRun.objects.create(stage=stage, status="running")
 
     # Pass run ID to management command so it updates the SAME record (not a new one)
-    manage_py = PIPELINE_ROOT / "backend" / "manage.py"
-    cmd = [sys.executable, str(manage_py), "run_pipeline", "--stage", stage, "--run-id", str(run.id)]
+    cmd = [sys.executable, str(MANAGE_PY), "run_pipeline", "--stage", stage, "--run-id", str(run.id)]
     env = {**os.environ, "DJANGO_SETTINGS_MODULE": "fincera_project.settings"}
 
     try:
-        subprocess.Popen(cmd, cwd=str(PIPELINE_ROOT / "backend"),
+        subprocess.Popen(cmd, cwd=str(MANAGE_PY.parent),
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
     except Exception as e:
         run.status = "failed"
