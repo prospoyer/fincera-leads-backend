@@ -10,7 +10,12 @@ SECRET_KEY = os.environ.get(
 )
 DEBUG = os.environ.get("DEBUG", "true").lower() == "true"
 
-ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "*").split(",")
+# Build ALLOWED_HOSTS — always include Railway's injected domain automatically
+_allowed = os.environ.get("ALLOWED_HOSTS", "*").split(",")
+_railway_domain = os.environ.get("RAILWAY_PUBLIC_DOMAIN", "")   # injected by Railway
+if _railway_domain and _railway_domain not in _allowed:
+    _allowed.append(_railway_domain)
+ALLOWED_HOSTS = _allowed
 
 INSTALLED_APPS = [
     "django.contrib.contenttypes",
