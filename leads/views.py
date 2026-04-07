@@ -63,10 +63,15 @@ MANAGE_PY = Path(__file__).resolve().parents[1] / "manage.py"
 # ─── Orgs ────────────────────────────────────────────────────────────────────
 
 class OrgViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Org.objects.all().order_by("-revenue")
     filterset_class = OrgFilter
     search_fields = ["name", "city", "ein"]
     ordering_fields = ["revenue", "name", "state", "created_at"]
+
+    def get_queryset(self):
+        return (
+            Org.objects.annotate(contact_count_ann=Count("contacts"))
+            .order_by("-revenue")
+        )
 
     def get_serializer_class(self):
         return OrgListSerializer if self.action == "list" else OrgSerializer
@@ -229,7 +234,10 @@ def pipeline_stop(request):
 
 @api_view(["GET"])
 def pipeline_status(request):
-    run = PipelineRun.objects.first()
+    run = (
+        PipelineRun.objects.filter(status="running").order_by("-started_at").first()
+        or PipelineRun.objects.order_by("-started_at").first()
+    )
     if not run:
         return Response({"status": "idle"})
 
