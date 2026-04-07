@@ -170,7 +170,12 @@ def pipeline_runs(request):
 
 @api_view(["POST"])
 def pipeline_trigger(request):
-    stage = request.data.get("stage", "all")
+    stage       = request.data.get("stage", "all")
+    states      = request.data.get("states", [])
+    revenue_min = request.data.get("revenue_min")
+    revenue_max = request.data.get("revenue_max")
+    max_orgs    = request.data.get("max_orgs")
+
     if stage not in VALID_STAGES:
         return Response(
             {"error": f"Invalid stage. Choose from: {VALID_STAGES}"},
@@ -185,8 +190,16 @@ def pipeline_trigger(request):
 
     run = PipelineRun.objects.create(stage=stage, status="running")
 
-    # Pass run ID to management command so it updates the SAME record (not a new one)
     cmd = [sys.executable, str(MANAGE_PY), "run_pipeline", "--stage", stage, "--run-id", str(run.id)]
+    if states:
+        cmd += ["--states"] + states
+    if revenue_min is not None:
+        cmd += ["--revenue-min", str(revenue_min)]
+    if revenue_max is not None:
+        cmd += ["--revenue-max", str(revenue_max)]
+    if max_orgs is not None:
+        cmd += ["--max-orgs", str(max_orgs)]
+
     env = {**os.environ, "DJANGO_SETTINGS_MODULE": "fincera_project.settings"}
 
     try:
@@ -200,6 +213,18 @@ def pipeline_trigger(request):
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     return Response(PipelineRunSerializer(run).data, status=status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+def pipeline_stop(request):
+    run = PipelineRun.objects.filter(status="running").first()
+    if not run:
+        return Response({"error": "No running pipeline."}, status=status.HTTP_404_NOT_FOUND)
+    run.status = "cancelled"
+    run.log = "Stopped by user."
+    run.ended_at = datetime.now()
+    run.save()
+    return Response(PipelineRunSerializer(run).data)
 
 
 @api_view(["GET"])

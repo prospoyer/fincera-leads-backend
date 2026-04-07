@@ -13,5 +13,6 @@ urlpatterns = [
     path("export/",                 views.export_csv),
     path("pipeline/",               views.pipeline_runs),
     path("pipeline/trigger/",       views.pipeline_trigger),
+    path("pipeline/stop/",          views.pipeline_stop),
     path("pipeline/status/",        views.pipeline_status),
 ]
