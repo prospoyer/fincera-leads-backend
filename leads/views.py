@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from django.db import connection
 from django.db.models import Count
 from django.http import HttpResponse
 from rest_framework import viewsets, status
@@ -99,12 +100,25 @@ class ContactViewSet(viewsets.ReadOnlyModelViewSet):
 
 @api_view(["GET"])
 def stats(request):
-    total_orgs     = Org.objects.count()
-    total_contacts = Contact.objects.count()
+    # One round-trip for scalar counts (SQLite is much faster than 7 separate ORM counts).
+    with connection.cursor() as c:
+        c.execute(
+            """
+            SELECT
+              (SELECT COUNT(*) FROM orgs),
+              (SELECT COUNT(*) FROM contacts),
+              (SELECT COUNT(*) FROM contacts
+               WHERE email IS NOT NULL AND TRIM(email) != ''
+                 AND IFNULL(email_status, '') != 'invalid'),
+              (SELECT COUNT(*) FROM contacts WHERE email_status = 'verified'),
+              (SELECT COUNT(*) FROM contacts WHERE email_status = 'found'),
+              (SELECT COUNT(*) FROM contacts WHERE email_status = 'guessed'),
+              (SELECT COUNT(*) FROM orgs WHERE has_property = 1)
+            """
+        )
+        row = c.fetchone()
 
-    contacts_with_email = Contact.objects.filter(
-        email__isnull=False
-    ).exclude(email_status="invalid").count()
+    total_orgs, total_contacts, contacts_with_email, verified_emails, found_emails, guessed_emails, has_property_orgs = row
 
     orgs_by_state = list(
         Org.objects.values("state")
@@ -123,10 +137,10 @@ def stats(request):
         "total_contacts":      total_contacts,
         "contacts_with_email": contacts_with_email,
         "email_coverage_pct":  round(contacts_with_email / total_contacts * 100, 1) if total_contacts else 0,
-        "verified_emails":     Contact.objects.filter(email_status="verified").count(),
-        "found_emails":        Contact.objects.filter(email_status="found").count(),
-        "guessed_emails":      Contact.objects.filter(email_status="guessed").count(),
-        "has_property_orgs":   Org.objects.filter(has_property=1).count(),
+        "verified_emails":     verified_emails,
+        "found_emails":        found_emails,
+        "guessed_emails":      guessed_emails,
+        "has_property_orgs":   has_property_orgs,
         "orgs_by_state":       orgs_by_state,
         "top_titles":          top_titles,
     })
