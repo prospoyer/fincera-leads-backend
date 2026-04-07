@@ -8,6 +8,7 @@ router.register("contacts", views.ContactViewSet, basename="contact")
 
 urlpatterns = [
     path("",                        include(router.urls)),
+    path("health/",                 views.health),
     path("stats/",                  views.stats),
     path("export/",                 views.export_csv),
     path("pipeline/",               views.pipeline_runs),

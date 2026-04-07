@@ -18,6 +18,27 @@ from .serializers import (
     ContactSerializer, PipelineRunSerializer,
 )
 
+@api_view(["GET"])
+def health(request):
+    """No-DB health check — returns DB path and any connection error."""
+    import django.conf
+    db_path = django.conf.settings.DATABASES["default"]["NAME"]
+    try:
+        from django.db import connection
+        connection.ensure_connection()
+        db_ok = True
+        db_error = None
+    except Exception as e:
+        db_ok = False
+        db_error = str(e)
+    return Response({
+        "status":    "ok" if db_ok else "db_error",
+        "db_path":   str(db_path),
+        "db_ok":     db_ok,
+        "db_error":  db_error,
+    })
+
+
 VALID_STAGES  = ["discover", "enrich", "scrape", "emails", "export", "all"]
 PIPELINE_ROOT = Path(__file__).resolve().parents[2]  # fincera-leads/
 
