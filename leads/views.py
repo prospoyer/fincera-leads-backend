@@ -20,22 +20,38 @@ from .serializers import (
 
 @api_view(["GET"])
 def health(request):
-    """No-DB health check — returns DB path and any connection error."""
+    """Health check — returns DB path, tables, and any errors."""
     import django.conf
     db_path = django.conf.settings.DATABASES["default"]["NAME"]
+    tables = []
+    stats_error = None
+    db_error = None
+    db_ok = False
+
     try:
         from django.db import connection
         connection.ensure_connection()
         db_ok = True
-        db_error = None
+        with connection.cursor() as c:
+            c.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
+            tables = [r[0] for r in c.fetchall()]
     except Exception as e:
-        db_ok = False
         db_error = str(e)
+
+    # Try the stats query specifically
+    try:
+        Org.objects.count()
+        Contact.objects.count()
+    except Exception as e:
+        stats_error = str(e)
+
     return Response({
-        "status":    "ok" if db_ok else "db_error",
-        "db_path":   str(db_path),
-        "db_ok":     db_ok,
-        "db_error":  db_error,
+        "status":      "ok" if db_ok and not stats_error else "error",
+        "db_path":     str(db_path),
+        "db_ok":       db_ok,
+        "db_error":    db_error,
+        "tables":      tables,
+        "stats_error": stats_error,
     })
 
 
