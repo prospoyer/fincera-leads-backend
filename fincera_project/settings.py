@@ -58,6 +58,11 @@ CORS_ALLOWED_ORIGINS = os.environ.get(
     "http://localhost:5173,http://127.0.0.1:5173"
 ).split(",")
 
+# Allow all vercel.app preview deployments
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
+
 if DEBUG:
     CORS_ALLOW_ALL_ORIGINS = True
 
