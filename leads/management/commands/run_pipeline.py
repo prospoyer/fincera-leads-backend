@@ -40,7 +40,9 @@ class Command(BaseCommand):
         states      = options["states"] or config.TARGET_STATES
         revenue_min = options["revenue_min"] or config.REVENUE_MIN
         revenue_max = options["revenue_max"] or config.REVENUE_MAX
-        max_orgs    = options["max_orgs"] or config.MAX_ORGS
+        max_orgs = options["max_orgs"]
+        if max_orgs is None:
+            max_orgs = config.MAX_ORGS
 
         if run_id:
             try:
