@@ -30,6 +30,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         from leads.models import PipelineRun
+        from leads.pipeline_cancel import make_cancel_check
         import db as pipeline_db
         import pipeline as p
         import config
@@ -49,6 +50,8 @@ class Command(BaseCommand):
         else:
             run = PipelineRun.objects.create(stage=stage, status="running")
 
+        cancel_check = make_cancel_check(run.id)
+
         self.stdout.write(
             f"[pipeline] run_id={run.id} stage={stage} states={states} "
             f"revenue={revenue_min}-{revenue_max} max_orgs={max_orgs}"
@@ -58,10 +61,11 @@ class Command(BaseCommand):
             pipeline_db.init_db()
 
             if stage in ("discover", "all"):
-                # Process in batches of 5 states to avoid long-running requests
                 batch_size = 5
                 total = 0
                 for i in range(0, len(states), batch_size):
+                    if cancel_check():
+                        raise p.PipelineCancelled()
                     batch = states[i:i + batch_size]
                     self.stdout.write(f"[pipeline] discover batch {i//batch_size + 1}: {batch}")
                     added = p.stage_discover(
@@ -69,30 +73,48 @@ class Command(BaseCommand):
                         revenue_min=revenue_min,
                         revenue_max=revenue_max,
                         max_orgs=max_orgs,
+                        cancel_check=cancel_check,
                     )
                     total += added
                     if max_orgs and total >= max_orgs:
                         break
 
             if stage in ("enrich", "all"):
-                p.stage_enrich()
+                p.stage_enrich(cancel_check=cancel_check)
             if stage in ("scrape", "all"):
-                p.stage_scrape()
+                p.stage_scrape(cancel_check=cancel_check)
             if stage in ("emails", "all"):
-                p.stage_emails()
+                p.stage_emails(cancel_check=cancel_check)
             if stage in ("export", "all"):
-                p.stage_export()
+                p.stage_export(cancel_check=cancel_check)
 
-            run.status     = "completed"
-            run.ended_at   = datetime.now()
+            run.refresh_from_db()
+            run.status = "completed"
+            run.ended_at = datetime.now()
             run.orgs_found = pipeline_db.get_org_count()
+            run.process_pid = None
+            run.cancel_requested = False
             run.save()
             self.stdout.write(self.style.SUCCESS(f"[pipeline] '{stage}' completed."))
 
+        except p.PipelineCancelled:
+            run.refresh_from_db()
+            run.status = "cancelled"
+            if not run.log:
+                run.log = "Stopped by user."
+            run.ended_at = run.ended_at or datetime.now()
+            run.process_pid = None
+            run.cancel_requested = False
+            run.save()
+            self.stdout.write(self.style.WARNING("[pipeline] Cancelled."))
+
         except Exception as e:
-            run.status   = "failed"
-            run.log      = str(e)
+            run.refresh_from_db()
+            run.status = "failed"
+            run.log = str(e)
             run.ended_at = datetime.now()
+            run.process_pid = None
+            run.cancel_requested = False
             run.save()
             self.stderr.write(f"[pipeline] Failed: {e}")
             raise

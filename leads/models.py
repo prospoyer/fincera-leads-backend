@@ -89,6 +89,9 @@ class PipelineRun(models.Model):
     ended_at   = models.DateTimeField(null=True, blank=True)
     log        = models.TextField(blank=True, default="")
     orgs_found = models.IntegerField(default=0)
+    # Subprocess control (API stop + cooperative cancellation)
+    process_pid       = models.IntegerField(null=True, blank=True)
+    cancel_requested  = models.BooleanField(default=False)
 
     class Meta:
         db_table = "pipeline_runs"

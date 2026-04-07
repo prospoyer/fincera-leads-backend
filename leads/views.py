@@ -2,6 +2,7 @@ import csv
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from rest_framework.response import Response
 
 from .filters import OrgFilter, ContactFilter
 from .models import Org, Contact, PipelineRun
+from .process_kill import terminate_process_group
 from .serializers import (
     OrgSerializer, OrgListSerializer,
     ContactSerializer, PipelineRunSerializer,
@@ -208,8 +210,14 @@ def pipeline_trigger(request):
     env = {**os.environ, "DJANGO_SETTINGS_MODULE": "fincera_project.settings"}
 
     try:
-        subprocess.Popen(cmd, cwd=str(MANAGE_PY.parent),
-                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=env)
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(MANAGE_PY.parent),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            env=env,
+            start_new_session=True,
+        )
     except Exception as e:
         run.status = "failed"
         run.log = str(e)
@@ -217,18 +225,51 @@ def pipeline_trigger(request):
         run.save()
         return Response({"error": str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
+    run.process_pid = proc.pid
+    run.save(update_fields=["process_pid"])
+
     return Response(PipelineRunSerializer(run).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(["POST"])
 def pipeline_stop(request):
-    run = PipelineRun.objects.filter(status="running").first()
+    run = (
+        PipelineRun.objects.filter(status="running")
+        .order_by("-started_at")
+        .first()
+    )
     if not run:
         return Response({"error": "No running pipeline."}, status=status.HTTP_404_NOT_FOUND)
+
+    run.cancel_requested = True
+    run.save(update_fields=["cancel_requested"])
+
+    # Let the worker exit cooperatively (checks cancel_requested between batches)
+    cooperative_deadline = time.monotonic() + 12.0
+    while time.monotonic() < cooperative_deadline:
+        run.refresh_from_db()
+        if run.status != "running":
+            if run.cancel_requested:
+                run.cancel_requested = False
+                run.save(update_fields=["cancel_requested"])
+            return Response(PipelineRunSerializer(run).data)
+        time.sleep(0.25)
+
+    pid = run.process_pid
+    if pid:
+        terminate_process_group(pid)
+
+    run.refresh_from_db()
     run.status = "cancelled"
-    run.log = "Stopped by user."
+    run.log = "Stopped by user (process terminated)."
     run.ended_at = datetime.now()
-    run.save()
+    run.process_pid = None
+    run.cancel_requested = False
+    run.save(
+        update_fields=[
+            "status", "log", "ended_at", "process_pid", "cancel_requested",
+        ]
+    )
     return Response(PipelineRunSerializer(run).data)
 
 
@@ -247,6 +288,8 @@ def pipeline_status(request):
             run.status = "failed"
             run.log = "Timed out — process may have crashed."
             run.ended_at = datetime.now()
+            run.process_pid = None
+            run.cancel_requested = False
             run.save()
 
     return Response(PipelineRunSerializer(run).data)
